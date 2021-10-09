@@ -62,12 +62,6 @@ const testStrategy = () => {
 };
 
 (async function init() {
-  const configFile = await getConfigFile();
-
-  if (!configFile) {
-    return generateConfiguration();
-  }
-
   inquirer
     .prompt([
       {
