@@ -1,0 +1,9 @@
+const strategies = {
+  ALWAYS_BULL: 'ALWAYS_BULL',
+  ALWAYS_BEAR: 'ALWAYS_BEAR',
+  MINOR_PAYOUT: 'MINOR_PAYOUT',
+  BIGGER_PAYOUT: 'BIGGER_PAYOUT',
+  BOTH_DIRECTIONS: 'BOTH_DIRECTIONS',
+};
+
+module.exports = strategies;
