@@ -1,10 +1,13 @@
-const { chunk, compact, pick } = require('lodash');
+const { chunk, compact, pick, set, sortBy } = require('lodash');
 const Big = require('big.js');
 const fs = require('fs');
 const ora = require('ora');
+const Table = require('cli-table');
+const cliProgress = require('cli-progress');
 
 const useContract = require('./contract');
 const strategies = require('./constants/strategies');
+const { error } = require('console');
 
 const BSC_PROVIDER_URL =
   process.env.BSC_PROVIDER_URL || 'https://bsc-dataseed.binance.org/';
@@ -17,10 +20,6 @@ const fee = 0.03;
 
 const contract = useContract(BSC_PROVIDER_URL, PKS_CONTRACT_ADDRESS);
 
-function timeout(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function getHistoricalData() {
   try {
     const configFile = fs.readFileSync('./data.json');
@@ -30,7 +29,7 @@ function getHistoricalData() {
   }
 }
 
-async function getRoundData(round) {
+async function getRoundData(round, bar) {
   try {
     const data = await contract.methods.rounds(round).call();
 
@@ -43,6 +42,8 @@ async function getRoundData(round) {
 
     const bullPayout = totalAmount.div(bullAmountB).round(3).toString();
     const bearPayout = totalAmount.div(bearAmountB).round(3).toString();
+
+    bar.increment();
 
     return {
       ...pick(data, [
@@ -67,34 +68,60 @@ async function getRoundData(round) {
   }
 }
 
-async function fetchHistoricalData() {
-  const spinner = ora('Loading historical data').start();
-  const currentRound = await contract.methods.currentEpoch().call();
-  spinner.text = 'Loading rounds data';
+async function fetchHistoricalData(oldData, spinner) {
+  let data = oldData || [];
 
-  const [startRound, endRound] = [100, currentRound - 1];
+  spinner.text = 'Loading historical data';
+
+  const currentRound = parseInt(await contract.methods.currentEpoch().call());
+
+  let startRound = 100;
+
+  if (data && data.length > 0) {
+    data = sortBy(data, (round) => parseInt(round.epoch));
+    startRound = data[data.length - 1].epoch;
+
+    console.log(
+      `\n\n 🔎 Last saved round ${startRound}, current round: ${currentRound}\n`,
+    );
+  }
+
+  if (currentRound - startRound < 10) {
+    spinner.succeed('Using cached data');
+    return data;
+  }
+
+  const endRound = currentRound - 1;
 
   const rounds = [];
-  const data = [];
 
   for (let i = startRound; i < endRound; i++) {
     rounds.push(i);
   }
 
+  console.log(` 🔎 About to fetch ${rounds.length} rounds\n`);
+
   const chunks = chunk(rounds, 100);
   const groups = chunk(chunks, 10);
+
+  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+
+  spinner.stop();
+  bar.start(rounds.length, 0);
 
   await Promise.all(
     groups.map(async (group) => {
       for (const chunk of group) {
         data.push(
           ...compact(
-            await Promise.all(chunk.map((item) => getRoundData(item))),
+            await Promise.all(chunk.map((item) => getRoundData(item, bar))),
           ),
         );
       }
     }),
   );
+
+  bar.stop();
 
   spinner.succeed('Historical data saved');
   fs.writeFileSync('./data.json', JSON.stringify(data), 'utf8');
@@ -102,28 +129,52 @@ async function fetchHistoricalData() {
   return data;
 }
 
-async function runBacktest(settings) {
+async function runBacktest(settings, onDone) {
   const spinner = ora('Running backtest').start();
 
   let historicalData = getHistoricalData();
-
-  if (!historicalData) {
-    historicalData = await fetchHistoricalData();
-  }
+  historicalData = await fetchHistoricalData(historicalData, spinner);
 
   const betAmount = new Big(settings.amountPerTrade);
-  let capital = new Big(settings.capitalAmount);
 
-  let i = 0;
+  let capital = new Big(settings.capitalAmount);
+  let capitalB;
+
+  const bothDirections = settings.strategy === strategies.BOTH_DIRECTIONS;
+
+  if (new Big(settings.capitalAmount).lt(betAmount)) {
+    error('\nBet amount must be lower than capital amount');
+    return onDone();
+  }
+
+  // Both directions wallets
+  if (bothDirections) {
+    capital = new Big(settings.capitalAmount).div(2);
+    capitalB = new Big(settings.capitalAmount).div(2);
+
+    if (new Big(settings.capitalAmount).lt(betAmount * 2)) {
+      error('\nBet amount must be lower than capital amount for each wallet');
+      return onDone();
+    }
+
+    spinner.text = `Generating two wallets with ${capital.toString()} BNB each`;
+  }
+
   let wins = 0;
   let losses = 0;
 
   for (const round of historicalData) {
-    capital = capital.minus(betAmount);
+    if (!bothDirections) {
+      capital = capital.minus(betAmount);
 
-    if (capital.lt(0)) {
-      capital = new Big(0);
-      break;
+      if (capital.lt(0)) {
+        capital = new Big(0);
+        break;
+      }
+    } else {
+      if (capitalB.lt(betAmount.times(2)) || capital.lt(betAmount.times(2))) {
+        break;
+      }
     }
 
     const bullAmount = new Big(round.bullAmount);
@@ -148,9 +199,7 @@ async function runBacktest(settings) {
           result = 1;
           capital = capital
             // Add payout
-            .plus(betAmount.times(biggerPayout))
-            // Minus fee
-            .minus(betAmount.times(biggerPayout).times(fee));
+            .plus(betAmount.times(biggerPayout).times(1 - fee));
         }
 
         break;
@@ -165,9 +214,7 @@ async function runBacktest(settings) {
           result = 1;
           capital = capital
             // Add payout
-            .plus(betAmount.times(minorPayout))
-            // Minus fee
-            .minus(betAmount.times(minorPayout).times(fee));
+            .plus(betAmount.times(minorPayout).times(1 - fee));
         }
         break;
       }
@@ -179,9 +226,7 @@ async function runBacktest(settings) {
           result = 1;
           capital = capital
             // Add payout
-            .plus(betAmount.times(bearPayout))
-            // Minus fee
-            .minus(betAmount.times(bearPayout).times(fee));
+            .plus(betAmount.times(bearPayout).times(1 - fee));
         }
 
         break;
@@ -194,12 +239,56 @@ async function runBacktest(settings) {
           result = 1;
           capital = capital
             // Add payout
-            .plus(betAmount.times(bullPayout))
-            // Minus fee
-            .minus(betAmount.times(bullPayout).times(fee));
+            .plus(betAmount.times(bullPayout).times(1 - fee));
         }
 
         break;
+      }
+
+      case settings.strategy === strategies.BOTH_DIRECTIONS: {
+        // A bets for bull
+        // B bets for bear
+
+        let bullBetMultip;
+        let bearBetMultip;
+
+        // Add weight to minor payout
+        if (settings.payoutToWeight === 'LESS_PAYOUT') {
+          bullBetMultip = bullPayout.lt(bearPayout)
+            ? parseInt(settings.weightValue)
+            : 1;
+
+          bearBetMultip = bearPayout.lt(bullPayout)
+            ? parseInt(settings.weightValue)
+            : 1;
+        } else {
+          // Add weight to greater payout
+          bullBetMultip = bullPayout.gt(bearPayout)
+            ? parseInt(settings.weightValue)
+            : 1;
+
+          bearBetMultip = bearPayout.gt(bullPayout)
+            ? parseInt(settings.weightValue)
+            : 1;
+        }
+
+        const walletABetAmount = betAmount.times(bullBetMultip);
+        const walletBBetAmount = betAmount.times(bearBetMultip);
+
+        capital = capital.minus(walletABetAmount);
+        capitalB = capitalB.minus(walletBBetAmount);
+
+        if (round.winner === 'bull') {
+          capital = capital
+            // Add payout
+            .plus(walletABetAmount.times(bullPayout).times(1 - fee));
+        }
+
+        if (round.winner === 'bear') {
+          capitalB = capitalB
+            // Add payout
+            .plus(walletBBetAmount.times(bearPayout).times(1 - fee));
+        }
       }
     }
 
@@ -209,8 +298,6 @@ async function runBacktest(settings) {
       losses++;
     }
 
-    i++;
-
     spinner.frame();
   }
 
@@ -218,19 +305,77 @@ async function runBacktest(settings) {
 
   const startingAmount = new Big(settings.capitalAmount);
 
-  console.info(`\n Report using ${settings.strategy} strategy \n`);
+  let table;
 
-  console.table({
-    initialInvestment: startingAmount.toString(),
-    totalRoundPlayed: historicalData.length.toString(),
-    wins: wins.toString(),
-    losses: losses.toString(),
-    realizedPNL: capital
+  if (settings.strategy === strategies.BOTH_DIRECTIONS) {
+    const resultingCapital = capital.plus(capitalB);
+    const startingCapital = new Big(startingAmount);
+
+    const pnl = resultingCapital
+      .minus(startingCapital)
+      .abs()
+      .times(startingCapital.gt(resultingCapital) ? -1 : 1);
+
+    table = new Table({
+      style: {
+        head: [pnl.gt(0) ? 'green' : 'red'],
+      },
+      head: [
+        'Strategy',
+        'Initial invested per wallet',
+        'Total invested',
+        'Total rounds played',
+        'PNL (BNB)',
+        'PNL %',
+        'Sentiment',
+      ],
+    });
+
+    table.push([
+      settings.strategy,
+      startingAmount.div(2).toString(),
+      startingCapital.toString(),
+      historicalData.length.toString(),
+      pnl.toString(),
+      pnl.times(100).div(startingAmount),
+      pnl.gt(0) ? '🤑' : '😢',
+    ]);
+  } else {
+    const pnl = capital
       .minus(startingAmount)
       .abs()
-      .times(startingAmount.gt(capital) ? -1 : 1)
-      .toString(),
-  });
+      .times(startingAmount.gt(capital) ? -1 : 1);
+
+    table = new Table({
+      style: {
+        head: [pnl.gt(0) ? 'green' : 'red'],
+      },
+      head: [
+        'Strategy',
+        'Total invested',
+        'Total rounds played',
+        'Wins',
+        'Losses',
+        'PNL (BNB)',
+        'PNL %',
+        'Sentiment',
+      ],
+    });
+
+    table.push([
+      settings.strategy,
+      startingAmount.toString(),
+      historicalData.length.toString(),
+      wins.toString(),
+      losses.toString(),
+      pnl.toString(),
+      pnl.times(100).div(startingAmount),
+      pnl.gt(0) ? '🤑' : '😢',
+    ]);
+  }
+
+  console.log(table.toString());
+  onDone();
 }
 
 module.exports = runBacktest;

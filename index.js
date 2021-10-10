@@ -17,7 +17,7 @@ const strategySelector = {
     },
     {
       value: strategies.MINOR_PAYOUT,
-      message: 'Less Payout',
+      message: 'Minor Payout',
       name: 'Minor Payout',
     },
     {
@@ -29,6 +29,11 @@ const strategySelector = {
       value: strategies.ALWAYS_BULL,
       message: 'alwaysBull',
       name: 'Always Bull',
+    },
+    {
+      value: strategies.BOTH_DIRECTIONS,
+      message: 'bothDirections',
+      name: 'Trade Both Directions',
     },
   ],
 };
@@ -51,14 +56,49 @@ const initialCapitalSelector = {
   },
 };
 
-const testStrategy = () => {
+const payoutWeight = {
+  type: 'rawlist',
+  name: 'payoutToWeight',
+  message: 'Select which payout you want to add weight',
+  choices: [
+    {
+      value: 'LESS_PAYOUT',
+      message: 'Add weight to minor payout',
+      name: 'Add weight to minor payout',
+    },
+    {
+      value: 'BIGGER_PAYOUT',
+      message: 'Add weight to bigger payout',
+      name: 'Add weight to bigger payout',
+    },
+  ],
+};
+
+const weightValue = {
+  type: 'input',
+  name: 'weightValue',
+  message: 'Multiply selected payout by',
+  default() {
+    return `2`;
+  },
+};
+
+const testStrategy = (onDone) => {
   inquirer
     .prompt([
       strategySelector,
       initialCapitalSelector,
       amountPerPositionSelector,
     ])
-    .then(backtest);
+    .then((settings) => {
+      if (settings.strategy === strategies.BOTH_DIRECTIONS) {
+        inquirer.prompt([payoutWeight, weightValue]).then((_settings) => {
+          backtest({ ...settings, ..._settings }, onDone);
+        });
+      } else {
+        backtest(settings, onDone);
+      }
+    });
 };
 
 (async function init() {
@@ -86,7 +126,7 @@ const testStrategy = () => {
     .then(({ action }) => {
       switch (true) {
         case action === options.TEST_STRATEGY:
-          testStrategy();
+          testStrategy(init);
           break;
       }
     });

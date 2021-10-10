@@ -1,6 +1,7 @@
 # compiled output
 dist
 node_modules
+data.json
 
 # Logs
 logs
@@ -9,7 +10,6 @@ npm-debug.log*
 
 # OS
 .DS_Store
-
 
 # Env
 .env

@@ -10,6 +10,8 @@
   "license": "ISC",
   "dependencies": {
     "big.js": "^6.1.1",
+    "cli-progress": "^3.9.1",
+    "cli-table": "^0.3.6",
     "commander": "^8.2.0",
     "dotenv": "^10.0.0",
     "ethereumjs-common": "^1.5.2",
