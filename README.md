@@ -2,6 +2,7 @@
 
 ### Run simulations(backtesting) and place bets on realtime (soon)
 
+
 ## Roadmap
 
 - ✅ Call contract
@@ -28,6 +29,9 @@
 #### Strategy result
 
 ![](https://i.imgur.com/92STiNs.png)
+
+## Buy me a beer
+0x4f7336C31c8EbE52BAaf4Ac24887EA4FE2C7BFAF BSC wallet
 
 ## Strategies
 
