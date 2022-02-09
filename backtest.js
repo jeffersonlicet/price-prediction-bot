@@ -189,9 +189,9 @@ async function runBacktest(settings, onDone) {
 
     switch (true) {
       case settings.strategy === strategies.BIGGER_PAYOUT: {
-        const bet = bullAmount.gt(bearAmount) ? 'bull' : 'bear';
+        const bet = bullAmount.lt(bearAmount) ? 'bull' : 'bear';
 
-        const biggerPayout = bullAmount.gt(bearAmount)
+        const biggerPayout = bullAmount.lt(bearAmount)
           ? bullPayout
           : bearPayout;
 
@@ -206,7 +206,7 @@ async function runBacktest(settings, onDone) {
       }
 
       case settings.strategy === strategies.MINOR_PAYOUT: {
-        const bet = bullAmount.gt(bearAmount) ? 'bear' : 'bull';
+        const bet = bullAmount.lt(bearAmount) ? 'bear' : 'bull';
 
         const minorPayout = bullPayout.gt(bearPayout) ? bearPayout : bullPayout;
 
